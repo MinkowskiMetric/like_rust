@@ -90,6 +90,12 @@ impl Lexer<'_> {
                 Some('b') if self.chars.peek2() == Some('\"') => {
                     break self.string_literal(CharLiteralType::ByteString)
                 }
+                Some('r') if self.chars.peek2() == Some('"') => {
+                    break self.string_literal(CharLiteralType::RawString)
+                }
+                Some('r') if self.chars.peek2() == Some('#') => {
+                    break self.string_literal(CharLiteralType::RawString)
+                }
 
                 Some(c) => self.emit_unexpected_char(c)?,
             }
@@ -301,17 +307,45 @@ impl Lexer<'_> {
             CharLiteralType::ByteString => ("b\"", '\"'),
             CharLiteralType::Char => ("\'", '\''),
             CharLiteralType::String => ("\"", '\"'),
-
-            ty => todo!("We don't support {:?} yet", ty),
+            CharLiteralType::RawString => ("r", '\"'),
         };
 
-        let start_delimiter_range = self.assert_next_str(start_delimiter);
-        let (start_pos, content_start_pos) =
-            (start_delimiter_range.start, start_delimiter_range.end);
+        let start_pos = self.assert_next_str(start_delimiter).start;
 
-        // When we support raw strings, this will get more complicated. For now, this is actually straightforward
-        // all we need to do is to scan the characters looking for the delimiter. If we see a '\', then skip the following
-        // character. There are stricter rules than that, but we don't need to worry about them until we get to the parser
+        let pound_count = if ty == CharLiteralType::RawString {
+            let mut pound_count = 0_usize;
+
+            while self.chars.peek1() == Some('#') {
+                self.chars.next();
+                pound_count += 1;
+            }
+
+            match self.chars.peek1() {
+                Some('\"') => {
+                    self.chars.next();
+                }
+
+                Some(c) => {
+                    return Err(Span::from_parts(
+                        TokenError::UnexpectedCharacter(c),
+                        self.assert_next_char(c),
+                    ))
+                }
+                None => {
+                    return Err(Span::from_parts(
+                        TokenError::UnexpectedEndOfFile,
+                        self.chars.current_pos()..self.chars.current_pos(),
+                    ))
+                }
+            }
+
+            pound_count
+        } else {
+            0
+        };
+
+        let content_start_pos = self.chars.current_pos();
+
         loop {
             let content_end_pos = self.chars.current_pos();
 
@@ -323,13 +357,21 @@ impl Lexer<'_> {
                     ))
                 }
                 Some(c) if c == end_delimiter => {
-                    break Ok(Span::from_parts(
-                        Token::CharLiteral {
-                            contents: content_start_pos..content_end_pos,
-                            ty,
-                        },
-                        start_pos..self.chars.current_pos(),
-                    ))
+                    let mut terminal_pound_count = 0_usize;
+                    while terminal_pound_count < pound_count && self.chars.peek1() == Some('#') {
+                        self.chars.next();
+                        terminal_pound_count += 1;
+                    }
+
+                    if terminal_pound_count == pound_count {
+                        break Ok(Span::from_parts(
+                            Token::CharLiteral {
+                                contents: content_start_pos..content_end_pos,
+                                ty,
+                            },
+                            start_pos..self.chars.current_pos(),
+                        ));
+                    }
                 }
                 Some('\\') => {
                     self.chars.next();
@@ -721,6 +763,19 @@ mod test {
                     0..12,
                 )),
                 Ok(Span::from_parts(Token::EndOfFile, 12..12)),
+            ],
+        );
+        check_tokens(
+            "r\"hello\\n   \"",
+            [
+                Ok(Span::from_parts(
+                    Token::CharLiteral {
+                        contents: 2..12,
+                        ty: CharLiteralType::RawString,
+                    },
+                    0..13,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 13..13)),
             ],
         );
     }
