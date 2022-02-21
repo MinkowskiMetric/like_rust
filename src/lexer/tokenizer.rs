@@ -1,4 +1,4 @@
-use super::{CharReader, NumberLiteralType, Token, TokenError};
+use super::{CharLiteralType, CharReader, NumberLiteralType, Token, TokenError};
 use crate::Span;
 
 const fn is_whitespace(c: char) -> bool {
@@ -81,6 +81,15 @@ impl Lexer<'_> {
                     break self.hexadecimal_integer_literal()
                 }
                 Some('0'..='9') => break self.number_literal(),
+
+                Some('\'') => break self.string_literal(CharLiteralType::Char),
+                Some('\"') => break self.string_literal(CharLiteralType::String),
+                Some('b') if self.chars.peek2() == Some('\'') => {
+                    break self.string_literal(CharLiteralType::ByteChar)
+                }
+                Some('b') if self.chars.peek2() == Some('\"') => {
+                    break self.string_literal(CharLiteralType::ByteString)
+                }
 
                 Some(c) => self.emit_unexpected_char(c)?,
             }
@@ -284,6 +293,51 @@ impl Lexer<'_> {
             start_pos..end_pos,
         ))
     }
+
+    fn string_literal(&mut self, ty: CharLiteralType) -> Result<Span<Token>, Span<TokenError>> {
+        // Start by consuming the initial delimiter
+        let (start_delimiter, end_delimiter) = match ty {
+            CharLiteralType::ByteChar => ("b\'", '\''),
+            CharLiteralType::ByteString => ("b\"", '\"'),
+            CharLiteralType::Char => ("\'", '\''),
+            CharLiteralType::String => ("\"", '\"'),
+
+            ty => todo!("We don't support {:?} yet", ty),
+        };
+
+        let start_delimiter_range = self.assert_next_str(start_delimiter);
+        let (start_pos, content_start_pos) =
+            (start_delimiter_range.start, start_delimiter_range.end);
+
+        // When we support raw strings, this will get more complicated. For now, this is actually straightforward
+        // all we need to do is to scan the characters looking for the delimiter. If we see a '\', then skip the following
+        // character. There are stricter rules than that, but we don't need to worry about them until we get to the parser
+        loop {
+            let content_end_pos = self.chars.current_pos();
+
+            match self.chars.next() {
+                None => {
+                    break Err(Span::from_parts(
+                        TokenError::ExpectedDelimiter(end_delimiter),
+                        start_pos..self.chars.current_pos(),
+                    ))
+                }
+                Some(c) if c == end_delimiter => {
+                    break Ok(Span::from_parts(
+                        Token::CharLiteral {
+                            contents: content_start_pos..content_end_pos,
+                            ty,
+                        },
+                        start_pos..self.chars.current_pos(),
+                    ))
+                }
+                Some('\\') => {
+                    self.chars.next();
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl<'a> From<&'a str> for Lexer<'a> {
@@ -319,8 +373,6 @@ impl<'a> Iterator for Lexer<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::lexer::NumberLiteralType;
-
     use super::*;
 
     fn check_tokens(source: &str, expected: impl AsRef<[Result<Span<Token>, Span<TokenError>>]>) {
@@ -617,6 +669,58 @@ mod test {
                     0..16,
                 )),
                 Ok(Span::from_parts(Token::EndOfFile, 16..16)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_string_literals() {
+        // This one is interesting. This is an empty char literal, which isn't really a thing, but the lexer doesn't care
+        // about that - we just treat it the same as a string literal, but with quotes
+        check_tokens(
+            "\'\'",
+            [
+                Ok(Span::from_parts(
+                    Token::CharLiteral {
+                        contents: 1..1,
+                        ty: CharLiteralType::Char,
+                    },
+                    0..2,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 2..2)),
+            ],
+        );
+        check_tokens(
+            "\'",
+            [
+                Err(Span::from_parts(TokenError::ExpectedDelimiter('\''), 0..1)),
+                Ok(Span::from_parts(Token::EndOfFile, 1..1)),
+            ],
+        );
+        check_tokens(
+            r"b'abcde\''",
+            [
+                Ok(Span::from_parts(
+                    Token::CharLiteral {
+                        contents: 2..9,
+                        ty: CharLiteralType::ByteChar,
+                    },
+                    0..10,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 10..10)),
+            ],
+        );
+        check_tokens(
+            "b\"hello\n   \"",
+            [
+                Ok(Span::from_parts(
+                    Token::CharLiteral {
+                        contents: 2..11,
+                        ty: CharLiteralType::ByteString,
+                    },
+                    0..12,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 12..12)),
             ],
         );
     }

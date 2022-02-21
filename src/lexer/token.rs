@@ -10,11 +10,25 @@ pub enum NumberLiteralType {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum CharLiteralType {
+    Char,
+    String,
+    ByteChar,
+    ByteString,
+    RawString,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Token {
     Number {
         digits: Range<usize>,
         ty: NumberLiteralType,
         suffix: Option<Range<usize>>,
+    },
+
+    CharLiteral {
+        contents: Range<usize>,
+        ty: CharLiteralType,
     },
 
     EndOfFile,
@@ -27,4 +41,5 @@ pub enum TokenError {
     UnterminatedComment,
     UnexpectedEndOfComment,
     ExpectedDigit,
+    ExpectedDelimiter(char),
 }
