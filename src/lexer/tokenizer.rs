@@ -54,8 +54,11 @@ impl Lexer<'_> {
 
     fn next_token(&mut self) -> Result<Span<Token>, Span<TokenError>> {
         loop {
-            if let Some(token) = self.string_literal()? {
-                break Ok(token);
+            if let Some(literal_token) = match self.string_literal()? {
+                Some(token) => Some(token),
+                None => self.number_literal()?,
+            } {
+                break Ok(literal_token);
             }
 
             match self.chars.peek1() {
@@ -76,15 +79,6 @@ impl Lexer<'_> {
                     let range = self.assert_next_str("*/");
                     break Err(Span::from_parts(TokenError::UnexpectedEndOfComment, range));
                 }
-
-                Some('0') if self.chars.peek2() == Some('b') => {
-                    break self.binary_integer_literal()
-                }
-                Some('0') if self.chars.peek2() == Some('o') => break self.octal_integer_literal(),
-                Some('0') if self.chars.peek2() == Some('x') => {
-                    break self.hexadecimal_integer_literal()
-                }
-                Some('0'..='9') => break self.number_literal(),
 
                 Some(c) => self.emit_unexpected_char(c)?,
             }
@@ -181,112 +175,88 @@ impl Lexer<'_> {
             .ok_or(TokenError::ExpectedDigit)
     }
 
-    fn consume_integer_literal(
-        &mut self,
-        expect: Option<&str>,
-        digits: &str,
-        ty: NumberLiteralType,
-        allow_suffix: bool,
-    ) -> Result<Span<Token>, Span<TokenError>> {
-        let prefix_range = if let Some(expect) = expect {
-            self.assert_next_str(expect)
-        } else {
-            let start_pos = self.chars.current_pos();
-            start_pos..start_pos
-        };
-
-        let start_pos = prefix_range.start;
-        let digits_start_pos = prefix_range.end;
+    fn consume_integer_literal(&mut self, digits: &str) -> Result<(), Span<TokenError>> {
+        let start_pos = self.chars.current_pos();
 
         // A number literal always has at least one digit
         self.expect_single_digit(digits)
-            .map_err(|error| Span::from_parts(error, start_pos..self.chars.current_pos()))?;
+            .map_err(|error| Span::from_parts(error, start_pos..start_pos))?;
 
         // Now keep running until we have all the digits
         while self.consume_single_digit(digits).is_some() {
             // Just keep going
         }
 
-        let digits_end_pos = self.chars.current_pos();
-        let digits = digits_start_pos..digits_end_pos;
+        Ok(())
+    }
 
-        let suffix = if allow_suffix {
-            self.consume_identifier().map(|span| span.to_parts().1)
-        } else {
-            None
+    fn number_literal(&mut self) -> Result<Option<Span<Token>>, Span<TokenError>> {
+        let start_pos = self.chars.current_pos();
+
+        let start = match self.chars.peek1() {
+            Some('0') => match self.chars.peek2() {
+                Some('b') => Some((Some("0b"), NumberLiteralType::Binary, "01_")),
+                Some('o') => Some((Some("0o"), NumberLiteralType::Octal, "01234567_")),
+                Some('x') => Some((
+                    Some("0x"),
+                    NumberLiteralType::Hexadecimal,
+                    "0123456789aAbBcCdDeEfF_",
+                )),
+                _ => Some((None, NumberLiteralType::Decimal, "0123456789_")),
+            },
+            Some('1'..='9') => Some((None, NumberLiteralType::Decimal, "0123456789_")),
+            _ => None,
         };
 
-        let end_pos = self.chars.current_pos();
+        start
+            .map(|(start_delimiter, mut ty, digits)| -> Result<_, _> {
+                let digits_start_pos = if let Some(start_delimiter) = start_delimiter {
+                    self.assert_next_str(start_delimiter).end
+                } else {
+                    start_pos
+                };
 
-        Ok(Span::from_parts(
-            Token::Number { digits, ty, suffix },
-            start_pos..end_pos,
-        ))
-    }
+                let can_be_float = ty == NumberLiteralType::Decimal;
 
-    fn binary_integer_literal(&mut self) -> Result<Span<Token>, Span<TokenError>> {
-        self.consume_integer_literal(Some("0b"), "01_", NumberLiteralType::Binary, true)
-    }
+                self.consume_integer_literal(digits)?;
 
-    fn octal_integer_literal(&mut self) -> Result<Span<Token>, Span<TokenError>> {
-        self.consume_integer_literal(Some("0o"), "01234567_", NumberLiteralType::Octal, true)
-    }
+                if can_be_float && matches!(self.chars.peek1(), Some('.')) {
+                    self.chars.next();
 
-    fn hexadecimal_integer_literal(&mut self) -> Result<Span<Token>, Span<TokenError>> {
-        self.consume_integer_literal(
-            Some("0x"),
-            "0123456789aAbBcCdDeEfF_",
-            NumberLiteralType::Hexadecimal,
-            true,
-        )
-    }
+                    // There is always a sequence of numbers after the decimal point "0." for example, is not allowed
+                    self.consume_integer_literal(digits)?;
 
-    fn number_literal(&mut self) -> Result<Span<Token>, Span<TokenError>> {
-        // All non-prefixed number literals start with a decimal part, so read that. We don't
-        // consume the suffix at this point - we need to check for float first
-        let start_pos = self
-            .consume_integer_literal(None, "0123456789_", NumberLiteralType::Decimal, false)?
-            .range()
-            .start;
+                    ty = NumberLiteralType::Float;
+                }
 
-        // Until proven otherwise, this is not a float
-        let mut ty = NumberLiteralType::Decimal;
+                // Look for the exponent indicator
+                if can_be_float && matches!(self.chars.peek1(), Some('e' | 'E')) {
+                    self.chars.next();
 
-        if matches!(self.chars.peek1(), Some('.')) {
-            self.chars.next();
+                    // Skip over a + or - sign
+                    if matches!(self.chars.peek1(), Some('+' | '-')) {
+                        self.chars.next();
+                    }
 
-            // There is always a sequence of numbers after the decimal point "0." for example, is not allowed
-            self.consume_integer_literal(None, "0123456789_", NumberLiteralType::Decimal, false)?;
+                    // There is always a sequence of numbers after the E
+                    self.consume_integer_literal(digits)?;
 
-            ty = NumberLiteralType::Float;
-        }
+                    ty = NumberLiteralType::Float;
+                }
 
-        // Look for the exponent indicator
-        if matches!(self.chars.peek1(), Some('e' | 'E')) {
-            self.chars.next();
+                let digits_end_pos = self.chars.current_pos();
+                let digits = digits_start_pos..digits_end_pos;
 
-            // Skip over a + or - sign
-            if matches!(self.chars.peek1(), Some('+' | '-')) {
-                self.chars.next();
-            }
+                let suffix = self.consume_identifier().map(|span| span.to_parts().1);
 
-            // There is always a sequence of numbers after the E
-            self.consume_integer_literal(None, "0123456789_", NumberLiteralType::Decimal, false)?;
+                let end_pos = self.chars.current_pos();
 
-            ty = NumberLiteralType::Float;
-        }
-
-        let digits_end_pos = self.chars.current_pos();
-        let digits = start_pos..digits_end_pos;
-
-        let suffix = self.consume_identifier().map(|span| span.to_parts().1);
-
-        let end_pos = self.chars.current_pos();
-
-        Ok(Span::from_parts(
-            Token::Number { digits, ty, suffix },
-            start_pos..end_pos,
-        ))
+                Ok(Span::from_parts(
+                    Token::Number { digits, ty, suffix },
+                    start_pos..end_pos,
+                ))
+            })
+            .transpose()
     }
 
     fn string_literal(&mut self) -> Result<Option<Span<Token>>, Span<TokenError>> {
@@ -533,7 +503,7 @@ mod test {
         check_tokens(
             "0b",
             [
-                Err(Span::from_parts(TokenError::ExpectedDigit, 0..2)),
+                Err(Span::from_parts(TokenError::ExpectedDigit, 2..2)),
                 Ok(Span::from_parts(Token::EndOfFile, 2..2)),
             ],
         );
@@ -594,7 +564,7 @@ mod test {
         check_tokens(
             "0o",
             [
-                Err(Span::from_parts(TokenError::ExpectedDigit, 0..2)),
+                Err(Span::from_parts(TokenError::ExpectedDigit, 2..2)),
                 Ok(Span::from_parts(Token::EndOfFile, 2..2)),
             ],
         );
@@ -655,7 +625,7 @@ mod test {
         check_tokens(
             "0x",
             [
-                Err(Span::from_parts(TokenError::ExpectedDigit, 0..2)),
+                Err(Span::from_parts(TokenError::ExpectedDigit, 2..2)),
                 Ok(Span::from_parts(Token::EndOfFile, 2..2)),
             ],
         );

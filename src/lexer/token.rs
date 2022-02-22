@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NumberLiteralType {
     Binary,
     Octal,
@@ -9,7 +9,7 @@ pub enum NumberLiteralType {
     Float,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CharLiteralType {
     Char,
     String,
