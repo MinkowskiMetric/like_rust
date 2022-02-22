@@ -16,6 +16,13 @@ pub enum CharLiteralType {
     ByteChar,
     ByteString,
     RawString,
+    RawByteString,
+}
+
+impl CharLiteralType {
+    pub fn is_raw(&self) -> bool {
+        matches!(self, Self::RawString | Self::RawByteString)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

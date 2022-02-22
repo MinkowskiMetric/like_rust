@@ -54,6 +54,10 @@ impl Lexer<'_> {
 
     fn next_token(&mut self) -> Result<Span<Token>, Span<TokenError>> {
         loop {
+            if let Some(token) = self.string_literal()? {
+                break Ok(token);
+            }
+
             match self.chars.peek1() {
                 None => {
                     break Ok(Span::from_parts(
@@ -81,21 +85,6 @@ impl Lexer<'_> {
                     break self.hexadecimal_integer_literal()
                 }
                 Some('0'..='9') => break self.number_literal(),
-
-                Some('\'') => break self.string_literal(CharLiteralType::Char),
-                Some('\"') => break self.string_literal(CharLiteralType::String),
-                Some('b') if self.chars.peek2() == Some('\'') => {
-                    break self.string_literal(CharLiteralType::ByteChar)
-                }
-                Some('b') if self.chars.peek2() == Some('\"') => {
-                    break self.string_literal(CharLiteralType::ByteString)
-                }
-                Some('r') if self.chars.peek2() == Some('"') => {
-                    break self.string_literal(CharLiteralType::RawString)
-                }
-                Some('r') if self.chars.peek2() == Some('#') => {
-                    break self.string_literal(CharLiteralType::RawString)
-                }
 
                 Some(c) => self.emit_unexpected_char(c)?,
             }
@@ -300,85 +289,102 @@ impl Lexer<'_> {
         ))
     }
 
-    fn string_literal(&mut self, ty: CharLiteralType) -> Result<Span<Token>, Span<TokenError>> {
-        // Start by consuming the initial delimiter
-        let (start_delimiter, end_delimiter) = match ty {
-            CharLiteralType::ByteChar => ("b\'", '\''),
-            CharLiteralType::ByteString => ("b\"", '\"'),
-            CharLiteralType::Char => ("\'", '\''),
-            CharLiteralType::String => ("\"", '\"'),
-            CharLiteralType::RawString => ("r", '\"'),
-        };
+    fn string_literal(&mut self) -> Result<Option<Span<Token>>, Span<TokenError>> {
+        fn raw_string_start(
+            mut chars: CharReader,
+            start_delimiter: &str,
+            ty: CharLiteralType,
+        ) -> Option<(CharLiteralType, String, char, usize)> {
+            // This should already have been checked
+            for ch in start_delimiter.chars() {
+                assert_eq!(chars.next(), Some(ch));
+            }
 
-        let start_pos = self.assert_next_str(start_delimiter).start;
-
-        let pound_count = if ty == CharLiteralType::RawString {
             let mut pound_count = 0_usize;
-
-            while self.chars.peek1() == Some('#') {
-                self.chars.next();
+            while chars.peek1() == Some('#') {
+                chars.next();
                 pound_count += 1;
             }
 
-            match self.chars.peek1() {
-                Some('\"') => {
-                    self.chars.next();
-                }
-
-                Some(c) => {
-                    return Err(Span::from_parts(
-                        TokenError::UnexpectedCharacter(c),
-                        self.assert_next_char(c),
-                    ))
-                }
-                None => {
-                    return Err(Span::from_parts(
-                        TokenError::UnexpectedEndOfFile,
-                        self.chars.current_pos()..self.chars.current_pos(),
-                    ))
-                }
-            }
-
-            pound_count
-        } else {
-            0
-        };
-
-        let content_start_pos = self.chars.current_pos();
-
-        loop {
-            let content_end_pos = self.chars.current_pos();
-
-            match self.chars.next() {
-                None => {
-                    break Err(Span::from_parts(
-                        TokenError::ExpectedDelimiter(end_delimiter),
-                        start_pos..self.chars.current_pos(),
-                    ))
-                }
-                Some(c) if c == end_delimiter => {
-                    let mut terminal_pound_count = 0_usize;
-                    while terminal_pound_count < pound_count && self.chars.peek1() == Some('#') {
-                        self.chars.next();
-                        terminal_pound_count += 1;
-                    }
-
-                    if terminal_pound_count == pound_count {
-                        break Ok(Span::from_parts(
-                            Token::CharLiteral {
-                                contents: content_start_pos..content_end_pos,
-                                ty,
-                            },
-                            start_pos..self.chars.current_pos(),
-                        ));
-                    }
-                }
-                Some('\\') => {
-                    self.chars.next();
-                }
-                _ => {}
+            if chars.next() == Some('\"') {
+                let start_delimiter =
+                    start_delimiter.to_string() + &("#".repeat(pound_count)) + "\"";
+                Some((ty, start_delimiter, '\"', pound_count))
+            } else {
+                None
             }
         }
+
+        let start = match self.chars.peek1() {
+            Some('\'') => Some((CharLiteralType::Char, "\'".to_string(), '\'', 0_usize)),
+            Some('\"') => Some((CharLiteralType::String, "\"".to_string(), '\"', 0_usize)),
+
+            Some('b') => match self.chars.peek2() {
+                Some('\'') => Some((CharLiteralType::ByteChar, "b\'".to_string(), '\'', 0_usize)),
+                Some('\"') => Some((
+                    CharLiteralType::ByteString,
+                    "b\"".to_string(),
+                    '\"',
+                    0_usize,
+                )),
+                Some('r') => {
+                    raw_string_start(self.chars.clone(), "br", CharLiteralType::RawByteString)
+                }
+
+                _ => None,
+            },
+
+            Some('r') => raw_string_start(self.chars.clone(), "r", CharLiteralType::RawString),
+
+            _ => None,
+        };
+
+        start
+            .and_then(|(ty, start_delimiter, end_delimiter, pound_count)| {
+                let start_delimiter_range = self.assert_next_str(&start_delimiter);
+                let start_pos = start_delimiter_range.start;
+                let content_start_pos = start_delimiter_range.end;
+
+                loop {
+                    let content_end_pos = self.chars.current_pos();
+
+                    match self.chars.next() {
+                        Some(c) if c == end_delimiter => {
+                            let mut terminal_pound_count = 0_usize;
+                            while terminal_pound_count < pound_count
+                                && self.chars.peek1() == Some('#')
+                            {
+                                self.chars.next();
+                                terminal_pound_count += 1;
+                            }
+
+                            if terminal_pound_count == pound_count {
+                                break Some(Ok(Span::from_parts(
+                                    Token::CharLiteral {
+                                        contents: content_start_pos..content_end_pos,
+                                        ty,
+                                    },
+                                    start_pos..self.chars.current_pos(),
+                                )));
+                            }
+                        }
+
+                        Some('\\') if !ty.is_raw() => {
+                            self.chars.next();
+                        } // Don't look at the next character
+                        None => {
+                            break Some(Err(Span::from_parts(
+                                TokenError::ExpectedDelimiter(end_delimiter),
+                                content_end_pos..content_end_pos,
+                            )))
+                        }
+
+                        // Ignore everything else
+                        _ => {}
+                    }
+                }
+            })
+            .transpose()
     }
 }
 
@@ -735,7 +741,7 @@ mod test {
         check_tokens(
             "\'",
             [
-                Err(Span::from_parts(TokenError::ExpectedDelimiter('\''), 0..1)),
+                Err(Span::from_parts(TokenError::ExpectedDelimiter('\''), 1..1)),
                 Ok(Span::from_parts(Token::EndOfFile, 1..1)),
             ],
         );
@@ -763,6 +769,79 @@ mod test {
                     0..12,
                 )),
                 Ok(Span::from_parts(Token::EndOfFile, 12..12)),
+            ],
+        );
+        check_tokens(
+            "r\"hello\\n   \"",
+            [
+                Ok(Span::from_parts(
+                    Token::CharLiteral {
+                        contents: 2..12,
+                        ty: CharLiteralType::RawString,
+                    },
+                    0..13,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 13..13)),
+            ],
+        );
+        check_tokens(
+            "r##\"hello\\n   ",
+            [
+                Err(Span::from_parts(
+                    TokenError::ExpectedDelimiter('\"'),
+                    14..14,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 14..14)),
+            ],
+        );
+        check_tokens(
+            "r##\"hello\\n   \"",
+            [
+                Err(Span::from_parts(
+                    TokenError::ExpectedDelimiter('\"'),
+                    15..15,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 15..15)),
+            ],
+        );
+        check_tokens(
+            "r##\"hello\\n   \"#",
+            [
+                Err(Span::from_parts(
+                    TokenError::ExpectedDelimiter('\"'),
+                    16..16,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 16..16)),
+            ],
+        );
+        check_tokens(
+            "r##\"hello\\n   \"##",
+            [
+                Ok(Span::from_parts(
+                    Token::CharLiteral {
+                        contents: 4..14,
+                        ty: CharLiteralType::RawString,
+                    },
+                    0..17,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 17..17)),
+            ],
+        );
+        check_tokens(
+            "br##\"hello\\n   \"###",
+            [
+                Ok(Span::from_parts(
+                    Token::CharLiteral {
+                        contents: 5..15,
+                        ty: CharLiteralType::RawByteString,
+                    },
+                    0..18,
+                )),
+                Err(Span::from_parts(
+                    TokenError::UnexpectedCharacter('#'),
+                    18..19,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 19..19)),
             ],
         );
         check_tokens(
