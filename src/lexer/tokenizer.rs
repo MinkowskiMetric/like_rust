@@ -1,4 +1,4 @@
-use super::{CharLiteralType, CharReader, NumberLiteralType, Token, TokenError};
+use super::{CharReader, LiteralType, Token, TokenError};
 use crate::Span;
 
 const fn is_whitespace(c: char) -> bool {
@@ -54,6 +54,8 @@ impl Lexer<'_> {
 
     fn next_token(&mut self) -> Result<Span<Token>, Span<TokenError>> {
         loop {
+            self.skip_whitespace();
+
             if let Some(literal_token) = match self.string_literal()? {
                 Some(token) => Some(token),
                 None => self.number_literal()?,
@@ -74,11 +76,6 @@ impl Lexer<'_> {
                     Some('*') => self.skip_block_comment()?,
                     _ => self.emit_unexpected_char('/')?,
                 },
-
-                Some('*') if self.chars.peek2() == Some('/') => {
-                    let range = self.assert_next_str("*/");
-                    break Err(Span::from_parts(TokenError::UnexpectedEndOfComment, range));
-                }
 
                 Some(c) => self.emit_unexpected_char(c)?,
             }
@@ -195,16 +192,16 @@ impl Lexer<'_> {
 
         let start = match self.chars.peek1() {
             Some('0') => match self.chars.peek2() {
-                Some('b') => Some((Some("0b"), NumberLiteralType::Binary, "01_")),
-                Some('o') => Some((Some("0o"), NumberLiteralType::Octal, "01234567_")),
+                Some('b') => Some((Some("0b"), LiteralType::Binary, "01_")),
+                Some('o') => Some((Some("0o"), LiteralType::Octal, "01234567_")),
                 Some('x') => Some((
                     Some("0x"),
-                    NumberLiteralType::Hexadecimal,
+                    LiteralType::Hexadecimal,
                     "0123456789aAbBcCdDeEfF_",
                 )),
-                _ => Some((None, NumberLiteralType::Decimal, "0123456789_")),
+                _ => Some((None, LiteralType::Decimal, "0123456789_")),
             },
-            Some('1'..='9') => Some((None, NumberLiteralType::Decimal, "0123456789_")),
+            Some('1'..='9') => Some((None, LiteralType::Decimal, "0123456789_")),
             _ => None,
         };
 
@@ -216,7 +213,7 @@ impl Lexer<'_> {
                     start_pos
                 };
 
-                let can_be_float = ty == NumberLiteralType::Decimal;
+                let can_be_float = ty == LiteralType::Decimal;
 
                 self.consume_integer_literal(digits)?;
 
@@ -226,7 +223,7 @@ impl Lexer<'_> {
                     // There is always a sequence of numbers after the decimal point "0." for example, is not allowed
                     self.consume_integer_literal(digits)?;
 
-                    ty = NumberLiteralType::Float;
+                    ty = LiteralType::Float;
                 }
 
                 // Look for the exponent indicator
@@ -241,7 +238,7 @@ impl Lexer<'_> {
                     // There is always a sequence of numbers after the E
                     self.consume_integer_literal(digits)?;
 
-                    ty = NumberLiteralType::Float;
+                    ty = LiteralType::Float;
                 }
 
                 let digits_end_pos = self.chars.current_pos();
@@ -252,7 +249,11 @@ impl Lexer<'_> {
                 let end_pos = self.chars.current_pos();
 
                 Ok(Span::from_parts(
-                    Token::Number { digits, ty, suffix },
+                    Token::Literal {
+                        contents: digits,
+                        ty,
+                        suffix,
+                    },
                     start_pos..end_pos,
                 ))
             })
@@ -263,8 +264,8 @@ impl Lexer<'_> {
         fn raw_string_start(
             mut chars: CharReader,
             start_delimiter: &str,
-            ty: CharLiteralType,
-        ) -> Option<(CharLiteralType, String, char, usize)> {
+            ty: LiteralType,
+        ) -> Option<(LiteralType, String, char, usize)> {
             // This should already have been checked
             for ch in start_delimiter.chars() {
                 assert_eq!(chars.next(), Some(ch));
@@ -286,25 +287,18 @@ impl Lexer<'_> {
         }
 
         let start = match self.chars.peek1() {
-            Some('\'') => Some((CharLiteralType::Char, "\'".to_string(), '\'', 0_usize)),
-            Some('\"') => Some((CharLiteralType::String, "\"".to_string(), '\"', 0_usize)),
+            Some('\'') => Some((LiteralType::Char, "\'".to_string(), '\'', 0_usize)),
+            Some('\"') => Some((LiteralType::String, "\"".to_string(), '\"', 0_usize)),
 
             Some('b') => match self.chars.peek2() {
-                Some('\'') => Some((CharLiteralType::ByteChar, "b\'".to_string(), '\'', 0_usize)),
-                Some('\"') => Some((
-                    CharLiteralType::ByteString,
-                    "b\"".to_string(),
-                    '\"',
-                    0_usize,
-                )),
-                Some('r') => {
-                    raw_string_start(self.chars.clone(), "br", CharLiteralType::RawByteString)
-                }
+                Some('\'') => Some((LiteralType::ByteChar, "b\'".to_string(), '\'', 0_usize)),
+                Some('\"') => Some((LiteralType::ByteString, "b\"".to_string(), '\"', 0_usize)),
+                Some('r') => raw_string_start(self.chars.clone(), "br", LiteralType::RawByteString),
 
                 _ => None,
             },
 
-            Some('r') => raw_string_start(self.chars.clone(), "r", CharLiteralType::RawString),
+            Some('r') => raw_string_start(self.chars.clone(), "r", LiteralType::RawString),
 
             _ => None,
         };
@@ -330,16 +324,17 @@ impl Lexer<'_> {
 
                             if terminal_pound_count == pound_count {
                                 break Some(Ok(Span::from_parts(
-                                    Token::CharLiteral {
+                                    Token::Literal {
                                         contents: content_start_pos..content_end_pos,
                                         ty,
+                                        suffix: None,
                                     },
                                     start_pos..self.chars.current_pos(),
                                 )));
                             }
                         }
 
-                        Some('\\') if !ty.is_raw() => {
+                        Some('\\') if !ty.is_raw_string() => {
                             self.chars.next();
                         } // Don't look at the next character
                         None => {
@@ -371,8 +366,6 @@ impl<'a> Iterator for Lexer<'a> {
     type Item = Result<Span<Token>, Span<TokenError>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.skip_whitespace();
-
         match self.next_token() {
             Ok(next_token) => {
                 if *next_token.value() == Token::EndOfFile
@@ -461,13 +454,6 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 19..19)),
             ],
         );
-        check_tokens(
-            "\n\n */",
-            [
-                Err(Span::from_parts(TokenError::UnexpectedEndOfComment, 3..5)),
-                Ok(Span::from_parts(Token::EndOfFile, 5..5)),
-            ],
-        );
     }
 
     #[test]
@@ -476,9 +462,9 @@ mod test {
             "0b0",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..3,
-                        ty: NumberLiteralType::Binary,
+                    Token::Literal {
+                        contents: 2..3,
+                        ty: LiteralType::Binary,
                         suffix: None,
                     },
                     0..3,
@@ -490,9 +476,9 @@ mod test {
             "0b0_1_____0__1___hello",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..17,
-                        ty: NumberLiteralType::Binary,
+                    Token::Literal {
+                        contents: 2..17,
+                        ty: LiteralType::Binary,
                         suffix: Some(17..22),
                     },
                     0..22,
@@ -511,17 +497,17 @@ mod test {
             "0b013",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..4,
-                        ty: NumberLiteralType::Binary,
+                    Token::Literal {
+                        contents: 2..4,
+                        ty: LiteralType::Binary,
                         suffix: None,
                     },
                     0..4,
                 )),
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 4..5,
-                        ty: NumberLiteralType::Decimal,
+                    Token::Literal {
+                        contents: 4..5,
+                        ty: LiteralType::Decimal,
                         suffix: None,
                     },
                     4..5,
@@ -537,9 +523,9 @@ mod test {
             "0o0",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..3,
-                        ty: NumberLiteralType::Octal,
+                    Token::Literal {
+                        contents: 2..3,
+                        ty: LiteralType::Octal,
                         suffix: None,
                     },
                     0..3,
@@ -551,9 +537,9 @@ mod test {
             "0o0_1_____2__7___hello",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..17,
-                        ty: NumberLiteralType::Octal,
+                    Token::Literal {
+                        contents: 2..17,
+                        ty: LiteralType::Octal,
                         suffix: Some(17..22),
                     },
                     0..22,
@@ -572,17 +558,17 @@ mod test {
             "0o018",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..4,
-                        ty: NumberLiteralType::Octal,
+                    Token::Literal {
+                        contents: 2..4,
+                        ty: LiteralType::Octal,
                         suffix: None,
                     },
                     0..4,
                 )),
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 4..5,
-                        ty: NumberLiteralType::Decimal,
+                    Token::Literal {
+                        contents: 4..5,
+                        ty: LiteralType::Decimal,
                         suffix: None,
                     },
                     4..5,
@@ -598,9 +584,9 @@ mod test {
             "0x0",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..3,
-                        ty: NumberLiteralType::Hexadecimal,
+                    Token::Literal {
+                        contents: 2..3,
+                        ty: LiteralType::Hexadecimal,
                         suffix: None,
                     },
                     0..3,
@@ -612,9 +598,9 @@ mod test {
             "0x0_1_____a__E___hello",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..17,
-                        ty: NumberLiteralType::Hexadecimal,
+                    Token::Literal {
+                        contents: 2..17,
+                        ty: LiteralType::Hexadecimal,
                         suffix: Some(17..22),
                     },
                     0..22,
@@ -633,9 +619,9 @@ mod test {
             "0x01G",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 2..4,
-                        ty: NumberLiteralType::Hexadecimal,
+                    Token::Literal {
+                        contents: 2..4,
+                        ty: LiteralType::Hexadecimal,
                         suffix: Some(4..5),
                     },
                     0..5,
@@ -651,9 +637,9 @@ mod test {
             "0",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 0..1,
-                        ty: NumberLiteralType::Decimal,
+                    Token::Literal {
+                        contents: 0..1,
+                        ty: LiteralType::Decimal,
                         suffix: None,
                     },
                     0..1,
@@ -665,9 +651,9 @@ mod test {
             "0_1_____2__3___hello",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 0..15,
-                        ty: NumberLiteralType::Decimal,
+                    Token::Literal {
+                        contents: 0..15,
+                        ty: LiteralType::Decimal,
                         suffix: Some(15..20),
                     },
                     0..20,
@@ -679,9 +665,9 @@ mod test {
             "0_1_e-17___hello",
             [
                 Ok(Span::from_parts(
-                    Token::Number {
-                        digits: 0..11,
-                        ty: NumberLiteralType::Float,
+                    Token::Literal {
+                        contents: 0..11,
+                        ty: LiteralType::Float,
                         suffix: Some(11..16),
                     },
                     0..16,
@@ -699,9 +685,10 @@ mod test {
             "\'\'",
             [
                 Ok(Span::from_parts(
-                    Token::CharLiteral {
+                    Token::Literal {
                         contents: 1..1,
-                        ty: CharLiteralType::Char,
+                        ty: LiteralType::Char,
+                        suffix: None,
                     },
                     0..2,
                 )),
@@ -719,9 +706,10 @@ mod test {
             r"b'abcde\''",
             [
                 Ok(Span::from_parts(
-                    Token::CharLiteral {
+                    Token::Literal {
                         contents: 2..9,
-                        ty: CharLiteralType::ByteChar,
+                        ty: LiteralType::ByteChar,
+                        suffix: None,
                     },
                     0..10,
                 )),
@@ -732,9 +720,10 @@ mod test {
             "b\"hello\n   \"",
             [
                 Ok(Span::from_parts(
-                    Token::CharLiteral {
+                    Token::Literal {
                         contents: 2..11,
-                        ty: CharLiteralType::ByteString,
+                        ty: LiteralType::ByteString,
+                        suffix: None,
                     },
                     0..12,
                 )),
@@ -745,9 +734,10 @@ mod test {
             "r\"hello\\n   \"",
             [
                 Ok(Span::from_parts(
-                    Token::CharLiteral {
+                    Token::Literal {
                         contents: 2..12,
-                        ty: CharLiteralType::RawString,
+                        ty: LiteralType::RawString,
+                        suffix: None,
                     },
                     0..13,
                 )),
@@ -788,9 +778,10 @@ mod test {
             "r##\"hello\\n   \"##",
             [
                 Ok(Span::from_parts(
-                    Token::CharLiteral {
+                    Token::Literal {
                         contents: 4..14,
-                        ty: CharLiteralType::RawString,
+                        ty: LiteralType::RawString,
+                        suffix: None,
                     },
                     0..17,
                 )),
@@ -801,9 +792,10 @@ mod test {
             "br##\"hello\\n   \"###",
             [
                 Ok(Span::from_parts(
-                    Token::CharLiteral {
+                    Token::Literal {
                         contents: 5..15,
-                        ty: CharLiteralType::RawByteString,
+                        ty: LiteralType::RawByteString,
+                        suffix: None,
                     },
                     0..18,
                 )),
@@ -818,9 +810,10 @@ mod test {
             "r\"hello\\n   \"",
             [
                 Ok(Span::from_parts(
-                    Token::CharLiteral {
+                    Token::Literal {
                         contents: 2..12,
-                        ty: CharLiteralType::RawString,
+                        ty: LiteralType::RawString,
+                        suffix: None,
                     },
                     0..13,
                 )),

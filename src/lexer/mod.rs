@@ -4,5 +4,5 @@ mod tokenizer;
 
 pub(self) use char_reader::CharReader;
 
-pub use token::{CharLiteralType, NumberLiteralType, Token, TokenError};
+pub use token::{LiteralType, Token, TokenError};
 pub use tokenizer::Lexer;

@@ -1,16 +1,12 @@
 use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum NumberLiteralType {
+pub enum LiteralType {
     Binary,
     Octal,
     Decimal,
     Hexadecimal,
     Float,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum CharLiteralType {
     Char,
     String,
     ByteChar,
@@ -19,23 +15,18 @@ pub enum CharLiteralType {
     RawByteString,
 }
 
-impl CharLiteralType {
-    pub fn is_raw(&self) -> bool {
+impl LiteralType {
+    pub fn is_raw_string(&self) -> bool {
         matches!(self, Self::RawString | Self::RawByteString)
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
-    Number {
-        digits: Range<usize>,
-        ty: NumberLiteralType,
-        suffix: Option<Range<usize>>,
-    },
-
-    CharLiteral {
+    Literal {
         contents: Range<usize>,
-        ty: CharLiteralType,
+        ty: LiteralType,
+        suffix: Option<Range<usize>>,
     },
 
     EndOfFile,
@@ -46,7 +37,6 @@ pub enum TokenError {
     UnexpectedEndOfFile,
     UnexpectedCharacter(char),
     UnterminatedComment,
-    UnexpectedEndOfComment,
     ExpectedDigit,
     ExpectedDelimiter(char),
 }
