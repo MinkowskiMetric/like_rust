@@ -53,39 +53,37 @@ impl Lexer<'_> {
     }
 
     fn next_token(&mut self) -> Result<Span<Token>, Span<TokenError>> {
-        loop {
-            self.skip_whitespace();
+        self.skip_whitespace()?;
 
-            if let Some(literal_token) = match self.string_literal()? {
-                Some(token) => Some(token),
-                None => self.number_literal()?,
-            } {
-                break Ok(literal_token);
-            }
+        if let Some(literal_token) = match self.string_literal()? {
+            Some(token) => Some(token),
+            None => self.number_literal()?,
+        } {
+            Ok(literal_token)
+        } else if let Some(_identifier_range) = self.consume_identifier() {
+            // We need to separate out identifiers and keywords here
+            todo!()
+        } else if let Some(punctuation_token) = self.punctuation() {
+            Ok(punctuation_token)
+        } else {
+            let start_pos = self.chars.current_pos();
 
-            match self.chars.peek1() {
-                None => {
-                    break Ok(Span::from_parts(
-                        Token::EndOfFile,
-                        self.chars.current_pos()..self.chars.current_pos(),
+            match self.chars.next() {
+                None => Ok(Span::from_parts(
+                    Token::EndOfFile,
+                    self.chars.current_pos()..self.chars.current_pos(),
+                )),
+
+                Some(c) => {
+                    let end_pos = self.chars.current_pos();
+                    self.skip_to_end_of_line();
+                    Err(Span::from_parts(
+                        TokenError::UnexpectedCharacter(c),
+                        start_pos..end_pos,
                     ))
                 }
-
-                Some('/') => match self.chars.peek2() {
-                    Some('/') => self.skip_to_end_of_line()?,
-                    Some('*') => self.skip_block_comment()?,
-                    _ => self.emit_unexpected_char('/')?,
-                },
-
-                Some(c) => self.emit_unexpected_char(c)?,
             }
         }
-    }
-
-    fn emit_unexpected_char(&mut self, c: char) -> Result<(), Span<TokenError>> {
-        let range = self.assert_next_char(c);
-        self.skip_to_end_of_line()?;
-        Err(Span::from_parts(TokenError::UnexpectedCharacter(c), range))
     }
 
     fn consume_char_if(&mut self, f: impl FnOnce(char) -> bool) -> Option<char> {
@@ -98,24 +96,41 @@ impl Lexer<'_> {
         }
     }
 
+    fn consume_matching_char(&mut self, matching: char) -> bool {
+        self.consume_char_if(|c| c == matching).is_some()
+    }
+
     fn skip_if(&mut self, f: impl (Fn(char) -> bool) + Clone) {
         while self.consume_char_if(f.clone()).is_some() {
             // Skip it
         }
     }
 
-    fn skip_whitespace(&mut self) {
-        self.skip_if(is_whitespace)
+    fn skip_whitespace(&mut self) -> Result<(), Span<TokenError>> {
+        loop {
+            match self.chars.peek1() {
+                Some(c) if is_whitespace(c) => {
+                    self.chars.next();
+                }
+
+                Some('/') if self.chars.peek2() == Some('/') => {
+                    self.skip_to_end_of_line();
+                }
+                Some('/') if self.chars.peek2() == Some('*') => {
+                    self.skip_block_comment()?;
+                }
+
+                _ => break Ok(()),
+            }
+        }
     }
 
-    fn skip_to_end_of_line(&mut self) -> Result<(), Span<TokenError>> {
+    fn skip_to_end_of_line(&mut self) {
         while let Some(c) = self.chars.next() {
             if c == '\u{000D}' {
                 break;
             }
         }
-
-        Ok(())
     }
 
     fn consume_identifier(&mut self) -> Option<Span<()>> {
@@ -353,6 +368,154 @@ impl Lexer<'_> {
     }
 }
 
+impl Lexer<'_> {
+    fn punctuation(&mut self) -> Option<Span<Token>> {
+        let start_pos = self.chars.current_pos();
+
+        let token = if self.consume_matching_char('+') {
+            if self.consume_matching_char('=') {
+                Some(Token::PlusEq)
+            } else {
+                Some(Token::Plus)
+            }
+        } else if self.consume_matching_char('-') {
+            if self.consume_matching_char('=') {
+                Some(Token::MinusEq)
+            } else if self.consume_matching_char('>') {
+                Some(Token::RArrow)
+            } else {
+                Some(Token::Minus)
+            }
+        } else if self.consume_matching_char('*') {
+            if self.consume_matching_char('=') {
+                Some(Token::StarEq)
+            } else {
+                Some(Token::Star)
+            }
+        } else if self.consume_matching_char('/') {
+            if self.consume_matching_char('=') {
+                Some(Token::SlashEq)
+            } else {
+                Some(Token::Slash)
+            }
+        } else if self.consume_matching_char('%') {
+            if self.consume_matching_char('=') {
+                Some(Token::PercentEq)
+            } else {
+                Some(Token::Percent)
+            }
+        } else if self.consume_matching_char('^') {
+            if self.consume_matching_char('=') {
+                Some(Token::CaretEq)
+            } else {
+                Some(Token::Caret)
+            }
+        } else if self.consume_matching_char('!') {
+            if self.consume_matching_char('=') {
+                Some(Token::Ne)
+            } else {
+                Some(Token::Not)
+            }
+        } else if self.consume_matching_char('&') {
+            if self.consume_matching_char('=') {
+                Some(Token::AndEq)
+            } else if self.consume_matching_char('&') {
+                Some(Token::AndAnd)
+            } else {
+                Some(Token::And)
+            }
+        } else if self.consume_matching_char('|') {
+            if self.consume_matching_char('=') {
+                Some(Token::OrEq)
+            } else if self.consume_matching_char('|') {
+                Some(Token::OrOr)
+            } else {
+                Some(Token::Or)
+            }
+        } else if self.consume_matching_char('<') {
+            if self.consume_matching_char('<') {
+                if self.consume_matching_char('=') {
+                    Some(Token::ShlEq)
+                } else {
+                    Some(Token::Shl)
+                }
+            } else if self.consume_matching_char('=') {
+                Some(Token::Le)
+            } else {
+                Some(Token::Lt)
+            }
+        } else if self.consume_matching_char('>') {
+            if self.consume_matching_char('>') {
+                if self.consume_matching_char('=') {
+                    Some(Token::ShrEq)
+                } else {
+                    Some(Token::Shr)
+                }
+            } else if self.consume_matching_char('=') {
+                Some(Token::Ge)
+            } else {
+                Some(Token::Gt)
+            }
+        } else if self.consume_matching_char('=') {
+            if self.consume_matching_char('=') {
+                Some(Token::EqEq)
+            } else if self.consume_matching_char('>') {
+                Some(Token::FatArrow)
+            } else {
+                Some(Token::Eq)
+            }
+        } else if self.consume_matching_char('@') {
+            Some(Token::At)
+        } else if self.consume_matching_char('_') {
+            Some(Token::Underscore)
+        } else if self.consume_matching_char('.') {
+            if self.consume_matching_char('.') {
+                if self.consume_matching_char('.') {
+                    Some(Token::DotDotDot)
+                } else if self.consume_matching_char('=') {
+                    Some(Token::DotDotEq)
+                } else {
+                    Some(Token::DotDot)
+                }
+            } else {
+                Some(Token::Dot)
+            }
+        } else if self.consume_matching_char(',') {
+            Some(Token::Comma)
+        } else if self.consume_matching_char(';') {
+            Some(Token::Semi)
+        } else if self.consume_matching_char(':') {
+            if self.consume_matching_char(':') {
+                Some(Token::PathSep)
+            } else {
+                Some(Token::Colon)
+            }
+        } else if self.consume_matching_char('#') {
+            Some(Token::Pound)
+        } else if self.consume_matching_char('$') {
+            Some(Token::Dollar)
+        } else if self.consume_matching_char('?') {
+            Some(Token::Question)
+        } else if self.consume_matching_char('(') {
+            Some(Token::OpenParen)
+        } else if self.consume_matching_char(')') {
+            Some(Token::CloseParen)
+        } else if self.consume_matching_char('[') {
+            Some(Token::OpenBracket)
+        } else if self.consume_matching_char(']') {
+            Some(Token::CloseBracket)
+        } else if self.consume_matching_char('{') {
+            Some(Token::OpenBrace)
+        } else if self.consume_matching_char('}') {
+            Some(Token::CloseBrace)
+        } else {
+            None
+        };
+
+        token.map(|token| Span::from_parts(token, start_pos..self.chars.current_pos()))
+    }
+}
+
 impl<'a> From<&'a str> for Lexer<'a> {
     fn from(str: &'a str) -> Self {
         Self {
@@ -404,6 +567,21 @@ mod test {
                     assert_eq!(expected_token, actual_token, "Mismatch token {}", index)
                 }
             }
+        }
+    }
+
+    fn check_simple_positive_matches<'a>(matches: impl AsRef<[(&'a str, Token)]>) {
+        for (source, token) in matches.as_ref().iter().cloned() {
+            check_tokens(
+                source,
+                [
+                    Ok(Span::from_parts(token, 0..source.len())),
+                    Ok(Span::from_parts(
+                        Token::EndOfFile,
+                        source.len()..source.len(),
+                    )),
+                ],
+            )
         }
     }
 
@@ -799,10 +977,7 @@ mod test {
                     },
                     0..18,
                 )),
-                Err(Span::from_parts(
-                    TokenError::UnexpectedCharacter('#'),
-                    18..19,
-                )),
+                Ok(Span::from_parts(Token::Pound, 18..19)),
                 Ok(Span::from_parts(Token::EndOfFile, 19..19)),
             ],
         );
@@ -820,5 +995,62 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 13..13)),
             ],
         );
+    }
+
+    #[test]
+    fn test_punctuation() {
+        check_simple_positive_matches([
+            ("+", Token::Plus),
+            ("-", Token::Minus),
+            ("*", Token::Star),
+            ("/", Token::Slash),
+            ("%", Token::Percent),
+            ("^", Token::Caret),
+            ("!", Token::Not),
+            ("&", Token::And),
+            ("|", Token::Or),
+            ("&&", Token::AndAnd),
+            ("||", Token::OrOr),
+            ("<<", Token::Shl),
+            (">>", Token::Shr),
+            ("+=", Token::PlusEq),
+            ("-=", Token::MinusEq),
+            ("*=", Token::StarEq),
+            ("/=", Token::SlashEq),
+            ("%=", Token::PercentEq),
+            ("^=", Token::CaretEq),
+            ("&=", Token::AndEq),
+            ("|=", Token::OrEq),
+            ("<<=", Token::ShlEq),
+            (">>=", Token::ShrEq),
+            ("=", Token::Eq),
+            ("==", Token::EqEq),
+            ("!=", Token::Ne),
+            (">", Token::Gt),
+            ("<", Token::Lt),
+            (">=", Token::Ge),
+            ("<=", Token::Le),
+            ("@", Token::At),
+            ("_", Token::Underscore),
+            (".", Token::Dot),
+            ("..", Token::DotDot),
+            ("...", Token::DotDotDot),
+            ("..=", Token::DotDotEq),
+            (",", Token::Comma),
+            (";", Token::Semi),
+            (":", Token::Colon),
+            ("::", Token::PathSep),
+            ("->", Token::RArrow),
+            ("=>", Token::FatArrow),
+            ("#", Token::Pound),
+            ("$", Token::Dollar),
+            ("?", Token::Question),
+            ("(", Token::OpenParen),
+            (")", Token::CloseParen),
+            ("[", Token::OpenBracket),
+            ("]", Token::CloseBracket),
+            ("{", Token::OpenBrace),
+            ("}", Token::CloseBrace),
+        ])
     }
 }

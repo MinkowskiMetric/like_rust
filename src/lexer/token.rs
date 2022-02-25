@@ -29,6 +29,58 @@ pub enum Token {
         suffix: Option<Range<usize>>,
     },
 
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Slash,        // /
+    Percent,      // %
+    Caret,        // ^
+    Not,          // !
+    And,          // &
+    Or,           // |
+    AndAnd,       // &&
+    OrOr,         // ||
+    Shl,          // <<
+    Shr,          // >>
+    PlusEq,       // +=
+    MinusEq,      // -=
+    StarEq,       // *=
+    SlashEq,      // /=
+    PercentEq,    // %=
+    CaretEq,      // ^=
+    AndEq,        // &=
+    OrEq,         // |=
+    ShlEq,        // <<=
+    ShrEq,        // >>=
+    Eq,           // =
+    EqEq,         // ==
+    Ne,           // !=
+    Gt,           // >
+    Lt,           // <
+    Ge,           // >=
+    Le,           // <=
+    At,           // @
+    Underscore,   // _
+    Dot,          // .
+    DotDot,       // ..
+    DotDotDot,    // ...
+    DotDotEq,     // ..=
+    Comma,        // ,
+    Semi,         // ;
+    Colon,        // :
+    PathSep,      // ::
+    RArrow,       // ->
+    FatArrow,     // =>
+    Pound,        // #
+    Dollar,       // $
+    Question,     // ?
+    OpenParen,    // (
+    CloseParen,   // )
+    OpenBracket,  // [
+    CloseBracket, // ]
+    OpenBrace,    // {
+    CloseBrace,   // }
+
     EndOfFile,
 }
 
