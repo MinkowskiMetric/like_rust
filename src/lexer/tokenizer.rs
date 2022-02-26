@@ -632,59 +632,23 @@ impl<'a> Iterator for Lexer<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-
-    fn check_tokens(source: &str, expected: impl AsRef<[Result<Span<Token>, Span<TokenError>>]>) {
-        let mut actual = Lexer::from(source);
-        let mut expected = expected.as_ref().into_iter().cloned().enumerate();
-
-        loop {
-            match (actual.next(), expected.next()) {
-                (None, None) => break,
-
-                (Some(unexpected_token), None) => {
-                    panic!("Unexpected trailing token: {:?}", unexpected_token)
-                }
-                (None, Some((index, expected_token))) => {
-                    panic!("Expected token {} missing: {:?}", index, expected_token)
-                }
-                (Some(actual_token), Some((index, expected_token))) => {
-                    assert_eq!(expected_token, actual_token, "Mismatch token {}", index)
-                }
-            }
-        }
-    }
-
-    fn check_simple_positive_matches<'a>(matches: impl AsRef<[(&'a str, Token)]>) {
-        for (source, token) in matches.as_ref().iter().cloned() {
-            check_tokens(
-                source,
-                [
-                    Ok(Span::from_parts(token, 0..source.len())),
-                    Ok(Span::from_parts(
-                        Token::EndOfFile,
-                        source.len()..source.len(),
-                    )),
-                ],
-            )
-        }
-    }
+    use super::{super::test_utils::*, *};
 
     #[test]
     fn test_empty_source() {
-        check_tokens("", [Ok(Span::from_parts(Token::EndOfFile, 0..0))]);
+        check_tokens_chars("", [Ok(Span::from_parts(Token::EndOfFile, 0..0))]);
     }
 
     #[test]
     fn test_whitespace_source() {
-        check_tokens("   ", [Ok(Span::from_parts(Token::EndOfFile, 3..3))]);
-        check_tokens("\t", [Ok(Span::from_parts(Token::EndOfFile, 1..1))]);
-        check_tokens("\r\n", [Ok(Span::from_parts(Token::EndOfFile, 2..2))]);
+        check_tokens_chars("   ", [Ok(Span::from_parts(Token::EndOfFile, 3..3))]);
+        check_tokens_chars("\t", [Ok(Span::from_parts(Token::EndOfFile, 1..1))]);
+        check_tokens_chars("\r\n", [Ok(Span::from_parts(Token::EndOfFile, 2..2))]);
     }
 
     #[test]
     fn single_line_comment() {
-        check_tokens(
+        check_tokens_chars(
             "// booyah!!",
             [Ok(Span::from_parts(Token::EndOfFile, 11..11))],
         );
@@ -692,25 +656,25 @@ mod test {
 
     #[test]
     fn block_comment() {
-        check_tokens(
+        check_tokens_chars(
             "/* booyah!!",
             [
                 Err(Span::from_parts(TokenError::UnterminatedComment, 0..2)),
                 Ok(Span::from_parts(Token::EndOfFile, 11..11)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "/* booyah!! */",
             [Ok(Span::from_parts(Token::EndOfFile, 14..14))],
         );
-        check_tokens(
+        check_tokens_chars(
             "/* /* booyah!!",
             [
                 Err(Span::from_parts(TokenError::UnterminatedComment, 3..5)),
                 Ok(Span::from_parts(Token::EndOfFile, 14..14)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "/* /* booyah!!\n\n */",
             [
                 Err(Span::from_parts(TokenError::UnterminatedComment, 0..2)),
@@ -721,7 +685,7 @@ mod test {
 
     #[test]
     fn test_binary_literals() {
-        check_tokens(
+        check_tokens_chars(
             "0b0",
             [
                 Ok(Span::from_parts(
@@ -735,7 +699,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 3..3)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0b0_1_____0__1___hello",
             [
                 Ok(Span::from_parts(
@@ -749,14 +713,14 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 22..22)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0b",
             [
                 Err(Span::from_parts(TokenError::ExpectedDigit, 2..2)),
                 Ok(Span::from_parts(Token::EndOfFile, 2..2)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0b013",
             [
                 Ok(Span::from_parts(
@@ -782,7 +746,7 @@ mod test {
 
     #[test]
     fn test_octal_literals() {
-        check_tokens(
+        check_tokens_chars(
             "0o0",
             [
                 Ok(Span::from_parts(
@@ -796,7 +760,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 3..3)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0o0_1_____2__7___hello",
             [
                 Ok(Span::from_parts(
@@ -810,14 +774,14 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 22..22)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0o",
             [
                 Err(Span::from_parts(TokenError::ExpectedDigit, 2..2)),
                 Ok(Span::from_parts(Token::EndOfFile, 2..2)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0o018",
             [
                 Ok(Span::from_parts(
@@ -843,7 +807,7 @@ mod test {
 
     #[test]
     fn test_hexadecimal_literals() {
-        check_tokens(
+        check_tokens_chars(
             "0x0",
             [
                 Ok(Span::from_parts(
@@ -857,7 +821,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 3..3)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0x0_1_____a__E___hello",
             [
                 Ok(Span::from_parts(
@@ -871,14 +835,14 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 22..22)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0x",
             [
                 Err(Span::from_parts(TokenError::ExpectedDigit, 2..2)),
                 Ok(Span::from_parts(Token::EndOfFile, 2..2)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0x01G",
             [
                 Ok(Span::from_parts(
@@ -896,7 +860,7 @@ mod test {
 
     #[test]
     fn test_decimal_literals() {
-        check_tokens(
+        check_tokens_chars(
             "0",
             [
                 Ok(Span::from_parts(
@@ -910,7 +874,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 1..1)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0_1_____2__3___hello",
             [
                 Ok(Span::from_parts(
@@ -924,7 +888,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 20..20)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "0_1_e-17___hello",
             [
                 Ok(Span::from_parts(
@@ -944,7 +908,7 @@ mod test {
     fn test_string_literals() {
         // This one is interesting. This is an empty char literal, which isn't really a thing, but the lexer doesn't care
         // about that - we just treat it the same as a string literal, but with quotes
-        check_tokens(
+        check_tokens_chars(
             "\'\'",
             [
                 Ok(Span::from_parts(
@@ -958,14 +922,14 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 2..2)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "\'",
             [
                 Err(Span::from_parts(TokenError::ExpectedDelimiter('\''), 1..1)),
                 Ok(Span::from_parts(Token::EndOfFile, 1..1)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             r"b'abcde\''",
             [
                 Ok(Span::from_parts(
@@ -979,7 +943,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 10..10)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "b\"hello\n   \"",
             [
                 Ok(Span::from_parts(
@@ -993,7 +957,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 12..12)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "r\"hello\\n   \"",
             [
                 Ok(Span::from_parts(
@@ -1007,7 +971,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 13..13)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "r##\"hello\\n   ",
             [
                 Err(Span::from_parts(
@@ -1017,7 +981,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 14..14)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "r##\"hello\\n   \"",
             [
                 Err(Span::from_parts(
@@ -1027,7 +991,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 15..15)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "r##\"hello\\n   \"#",
             [
                 Err(Span::from_parts(
@@ -1037,7 +1001,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 16..16)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "r##\"hello\\n   \"##",
             [
                 Ok(Span::from_parts(
@@ -1051,7 +1015,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 17..17)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "br##\"hello\\n   \"###",
             [
                 Ok(Span::from_parts(
@@ -1066,7 +1030,7 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 19..19)),
             ],
         );
-        check_tokens(
+        check_tokens_chars(
             "r\"hello\\n   \"",
             [
                 Ok(Span::from_parts(

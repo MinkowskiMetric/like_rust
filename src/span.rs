@@ -25,6 +25,15 @@ impl<T> Span<T> {
     pub fn range(&self) -> &Range<usize> {
         self.parts().1
     }
+
+    pub fn map_span<U, F: FnOnce(T) -> U>(self, f: F) -> Span<U> {
+        let (t, range) = self.to_parts();
+        Span::from_parts(f(t), range)
+    }
+
+    pub fn replace<U>(self, t: U) -> Span<U> {
+        Span::from_parts(t, self.range)
+    }
 }
 
 impl<T: Clone> Clone for Span<T> {
