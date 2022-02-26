@@ -26,9 +26,70 @@ fn is_identifier_continue(ch: char) -> bool {
     unic::ucd::ident::is_xid_continue(ch)
 }
 
+fn match_keyword(keyword: &str) -> Option<Token> {
+    match keyword {
+        "as" => Some(Token::As),
+        "break" => Some(Token::Break),
+        "const" => Some(Token::Const),
+        "continue" => Some(Token::Continue),
+        "crate" => Some(Token::Crate),
+        "else" => Some(Token::Else),
+        "enum" => Some(Token::Enum),
+        "extern" => Some(Token::Extern),
+        "false" => Some(Token::False),
+        "fn" => Some(Token::Fn),
+        "for" => Some(Token::For),
+        "if" => Some(Token::If),
+        "impl" => Some(Token::Impl),
+        "in" => Some(Token::In),
+        "let" => Some(Token::Let),
+        "loop" => Some(Token::Loop),
+        "match" => Some(Token::Match),
+        "mod" => Some(Token::Mod),
+        "move" => Some(Token::Move),
+        "mut" => Some(Token::Mut),
+        "pub" => Some(Token::Pub),
+        "ref" => Some(Token::Ref),
+        "return" => Some(Token::Return),
+        "self" => Some(Token::SelfValue),
+        "Self" => Some(Token::SelfType),
+        "static" => Some(Token::Static),
+        "super" => Some(Token::Super),
+        "trait" => Some(Token::Trait),
+        "true" => Some(Token::True),
+        "type" => Some(Token::Type),
+        "unsafe" => Some(Token::Unsafe),
+        "use" => Some(Token::Use),
+        "where" => Some(Token::Where),
+        "while" => Some(Token::While),
+
+        "async" => Some(Token::Async),
+        "await" => Some(Token::Await),
+        "dyn" => Some(Token::Dyn),
+
+        "abstract" => Some(Token::Abstract),
+        "become" => Some(Token::Become),
+        "box" => Some(Token::Box),
+        "do" => Some(Token::Do),
+        "final" => Some(Token::Final),
+        "macro" => Some(Token::Macro),
+        "override" => Some(Token::Override),
+        "priv" => Some(Token::Priv),
+        "typeof" => Some(Token::Typeof),
+        "unsized" => Some(Token::Unsized),
+        "virtual" => Some(Token::Virtual),
+        "yield" => Some(Token::Yield),
+
+        "try" => Some(Token::Try),
+
+        _ => None,
+    }
+}
+
 #[must_use]
 #[derive(Clone)]
 pub struct Lexer<'a> {
+    code: &'a str,
     chars: CharReader<'a>,
     end_of_file: bool,
 }
@@ -60,9 +121,18 @@ impl Lexer<'_> {
             None => self.number_literal()?,
         } {
             Ok(literal_token)
-        } else if let Some(_identifier_range) = self.consume_identifier() {
-            // We need to separate out identifiers and keywords here
-            todo!()
+        } else if let Some((_, contents)) = self.consume_identifier().map(Span::to_parts) {
+            if let Some(token) = match_keyword(&self.code[contents.clone()]) {
+                Ok(Span::from_parts(token, contents))
+            } else {
+                // We need to separate out identifiers and keywords here
+                Ok(Span::from_parts(
+                    Token::Identifier {
+                        contents: contents.clone(),
+                    },
+                    contents,
+                ))
+            }
         } else if let Some(punctuation_token) = self.punctuation() {
             Ok(punctuation_token)
         } else {
@@ -136,7 +206,21 @@ impl Lexer<'_> {
     fn consume_identifier(&mut self) -> Option<Span<()>> {
         let start_pos = self.chars.current_pos();
 
-        if self.consume_char_if(is_identifier_start).is_some() {
+        let is_start_of_identifier = match self.chars.peek1() {
+            Some('_') => match self.chars.peek2() {
+                Some(ch) => is_identifier_continue(ch),
+                _ => false,
+            },
+
+            Some(ch) => is_identifier_start(ch),
+            _ => false,
+        };
+
+        if is_start_of_identifier {
+            // Skip the first character
+            self.chars.next();
+
+            // Then skip the rest of it
             self.skip_if(is_identifier_continue);
 
             Some(Span::from_parts((), start_pos..self.chars.current_pos()))
@@ -517,9 +601,10 @@ impl Lexer<'_> {
 }
 
 impl<'a> From<&'a str> for Lexer<'a> {
-    fn from(str: &'a str) -> Self {
+    fn from(code: &'a str) -> Self {
         Self {
-            chars: CharReader::new(str),
+            code,
+            chars: CharReader::new(code),
             end_of_file: false,
         }
     }
@@ -1051,6 +1136,68 @@ mod test {
             ("]", Token::CloseBracket),
             ("{", Token::OpenBrace),
             ("}", Token::CloseBrace),
+        ])
+    }
+
+    #[test]
+    fn test_identifiers() {
+        check_simple_positive_matches([
+            ("hello", Token::Identifier { contents: 0..5 }),
+            ("_hello", Token::Identifier { contents: 0..6 }),
+            ("__hello", Token::Identifier { contents: 0..7 }),
+        ])
+    }
+    #[test]
+    fn test_keywords() {
+        check_simple_positive_matches([
+            ("as", Token::As),
+            ("break", Token::Break),
+            ("const", Token::Const),
+            ("continue", Token::Continue),
+            ("else", Token::Else),
+            ("enum", Token::Enum),
+            ("extern", Token::Extern),
+            ("false", Token::False),
+            ("fn", Token::Fn),
+            ("for", Token::For),
+            ("if", Token::If),
+            ("impl", Token::Impl),
+            ("in", Token::In),
+            ("let", Token::Let),
+            ("loop", Token::Loop),
+            ("match", Token::Match),
+            ("mod", Token::Mod),
+            ("move", Token::Move),
+            ("mut", Token::Mut),
+            ("pub", Token::Pub),
+            ("ref", Token::Ref),
+            ("return", Token::Return),
+            ("self", Token::SelfValue),
+            ("Self", Token::SelfType),
+            ("static", Token::Static),
+            ("super", Token::Super),
+            ("trait", Token::Trait),
+            ("true", Token::True),
+            ("type", Token::Type),
+            ("unsafe", Token::Unsafe),
+            ("use", Token::Use),
+            ("where", Token::Where),
+            ("while", Token::While),
+            ("async", Token::Async),
+            ("await", Token::Await),
+            ("dyn", Token::Dyn),
+            ("abstract", Token::Abstract),
+            ("become", Token::Become),
+            ("box", Token::Box),
+            ("final", Token::Final),
+            ("macro", Token::Macro),
+            ("override", Token::Override),
+            ("priv", Token::Priv),
+            ("typeof", Token::Typeof),
+            ("unsized", Token::Unsized),
+            ("virtual", Token::Virtual),
+            ("yield", Token::Yield),
+            ("try", Token::Try),
         ])
     }
 }

@@ -29,6 +29,10 @@ pub enum Token {
         suffix: Option<Range<usize>>,
     },
 
+    Identifier {
+        contents: Range<usize>,
+    },
+
     Plus,         // +
     Minus,        // -
     Star,         // *
@@ -80,6 +84,60 @@ pub enum Token {
     CloseBracket, // ]
     OpenBrace,    // {
     CloseBrace,   // }
+
+    As,        // as
+    Break,     // break
+    Const,     // const
+    Continue,  // continue
+    Crate,     // crate
+    Else,      // else
+    Enum,      // enum
+    Extern,    // extern
+    False,     // false
+    Fn,        // fn
+    For,       // for
+    If,        // if
+    Impl,      // impl
+    In,        // in
+    Let,       // let
+    Loop,      // loop
+    Match,     // match
+    Mod,       // mod
+    Move,      // move
+    Mut,       // mut
+    Pub,       // pub
+    Ref,       // ref
+    Return,    // return
+    SelfValue, // self
+    SelfType,  // Self
+    Static,    // static
+    Super,     // super
+    Trait,     // trait
+    True,      // true
+    Type,      // type
+    Unsafe,    // unsafe
+    Use,       // use
+    Where,     // where
+    While,     // while
+
+    Async, // async
+    Await, // await
+    Dyn,   // dyn
+
+    Abstract, // abstract
+    Become,   // become
+    Box,      // box
+    Do,       // do
+    Final,    // final
+    Macro,    // macro
+    Override, // override
+    Priv,     // priv
+    Typeof,   // typeof
+    Unsized,  // unsized
+    Virtual,  // virtual
+    Yield,    // yield
+
+    Try, // try
 
     EndOfFile,
 }
