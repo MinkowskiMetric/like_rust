@@ -8,5 +8,6 @@ pub(self) mod test_utils;
 
 pub(self) use char_reader::CharReader;
 
+pub use delimiter_checker::CheckDelimiters;
 pub use token::{DelimiterMode, DelimiterType, LiteralType, Token, TokenError};
 pub use tokenizer::Lexer;

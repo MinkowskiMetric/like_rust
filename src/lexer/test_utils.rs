@@ -7,7 +7,7 @@ pub fn check_tokens_chars<'a, S: Into<Lexer<'a>>>(
     check_tokens(chars.into(), expected)
 }
 
-pub fn check_tokens<'a, S: IntoIterator<Item = Result<Span<Token>, Span<TokenError>>>>(
+pub fn check_tokens<S: IntoIterator<Item = Result<Span<Token>, Span<TokenError>>>>(
     actual: S,
     expected: impl AsRef<[Result<Span<Token>, Span<TokenError>>]>,
 ) {
