@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use super::{CharReader, LiteralType, Token, TokenError};
 use crate::Span;
 
@@ -121,18 +123,16 @@ impl Lexer<'_> {
             None => self.number_literal()?,
         } {
             Ok(literal_token)
-        } else if let Some((_, contents)) = self.consume_identifier().map(Span::to_parts) {
-            if let Some(token) = match_keyword(&self.code[contents.clone()]) {
-                Ok(Span::from_parts(token, contents))
+        } else if let Some((contents, range)) = self.consume_identifier(true).map(Span::to_parts) {
+            let keyword_token = if contents == range {
+                match_keyword(&self.code[contents.clone()])
             } else {
-                // We need to separate out identifiers and keywords here
-                Ok(Span::from_parts(
-                    Token::Identifier {
-                        contents: contents.clone(),
-                    },
-                    contents,
-                ))
-            }
+                None
+            };
+
+            let token = keyword_token.unwrap_or(Token::Identifier { contents });
+
+            Ok(Span::from_parts(token, range))
         } else if let Some(punctuation_token) = self.punctuation() {
             Ok(punctuation_token)
         } else {
@@ -203,27 +203,39 @@ impl Lexer<'_> {
         }
     }
 
-    fn consume_identifier(&mut self) -> Option<Span<()>> {
+    fn consume_identifier(&mut self, allow_raw: bool) -> Option<Span<Range<usize>>> {
         let start_pos = self.chars.current_pos();
 
-        let is_start_of_identifier = match self.chars.peek1() {
+        let identifier_prefix = match self.chars.peek1() {
+            Some('r') if allow_raw && self.chars.peek2() == Some('#') => {
+                Some(("r#".to_owned(), false))
+            }
             Some('_') => match self.chars.peek2() {
-                Some(ch) => is_identifier_continue(ch),
-                _ => false,
+                Some(ch) if is_identifier_continue(ch) => Some((format!("_{}", ch), true)),
+                _ => None,
             },
 
-            Some(ch) => is_identifier_start(ch),
-            _ => false,
+            Some(ch) if is_identifier_start(ch) => Some((ch.to_string(), true)),
+            _ => None,
         };
 
-        if is_start_of_identifier {
-            // Skip the first character
-            self.chars.next();
+        if let Some((identifier_prefix, keep_prefix)) = identifier_prefix {
+            // Skip the prefix
+            self.assert_next_str(&identifier_prefix);
+
+            let identifier_start = if keep_prefix {
+                start_pos
+            } else {
+                self.chars.current_pos()
+            };
 
             // Then skip the rest of it
             self.skip_if(is_identifier_continue);
 
-            Some(Span::from_parts((), start_pos..self.chars.current_pos()))
+            Some(Span::from_parts(
+                identifier_start..self.chars.current_pos(),
+                start_pos..self.chars.current_pos(),
+            ))
         } else {
             None
         }
@@ -343,7 +355,7 @@ impl Lexer<'_> {
                 let digits_end_pos = self.chars.current_pos();
                 let digits = digits_start_pos..digits_end_pos;
 
-                let suffix = self.consume_identifier().map(|span| span.to_parts().1);
+                let suffix = self.consume_identifier(false).map(|span| span.to_parts().1);
 
                 let end_pos = self.chars.current_pos();
 
@@ -902,6 +914,25 @@ mod test {
                 Ok(Span::from_parts(Token::EndOfFile, 16..16)),
             ],
         );
+        check_tokens_chars(
+            "0_1_e-17___r#hello",
+            [
+                Ok(Span::from_parts(
+                    Token::Literal {
+                        contents: 0..11,
+                        ty: LiteralType::Float,
+                        suffix: Some(11..12),
+                    },
+                    0..12,
+                )),
+                Ok(Span::from_parts(Token::Pound, 12..13)),
+                Ok(Span::from_parts(
+                    Token::Identifier { contents: 13..18 },
+                    13..18,
+                )),
+                Ok(Span::from_parts(Token::EndOfFile, 18..18)),
+            ],
+        );
     }
 
     #[test]
@@ -1109,6 +1140,8 @@ mod test {
             ("hello", Token::Identifier { contents: 0..5 }),
             ("_hello", Token::Identifier { contents: 0..6 }),
             ("__hello", Token::Identifier { contents: 0..7 }),
+            ("r#hello", Token::Identifier { contents: 2..7 }),
+            ("r#crate", Token::Identifier { contents: 2..7 }),
         ])
     }
     #[test]
