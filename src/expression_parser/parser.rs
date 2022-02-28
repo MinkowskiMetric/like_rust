@@ -6,7 +6,7 @@ use crate::{CheckDelimiters, Lexer, Span, Token, TokenError};
 type TokenResult = Result<Span<Token>, Span<TokenError>>;
 
 #[must_use]
-pub struct ExpressionParser<Iter: Iterator<Item = TokenResult>> {
+pub struct ExpressionParser<Iter: Iterator<Item = TokenResult> + Clone> {
     iter: Peekable<Iter>,
     errors: Vec<ExpressionError>,
     end_of_file: Option<Span<Token>>,
@@ -14,6 +14,8 @@ pub struct ExpressionParser<Iter: Iterator<Item = TokenResult>> {
 
 impl<IntoIter: IntoIterator<Item = TokenResult>> From<IntoIter>
     for ExpressionParser<IntoIter::IntoIter>
+where
+    IntoIter::IntoIter: Clone,
 {
     fn from(s: IntoIter) -> Self {
         Self {
@@ -24,7 +26,7 @@ impl<IntoIter: IntoIterator<Item = TokenResult>> From<IntoIter>
     }
 }
 
-impl<Iter: Iterator<Item = TokenResult>> ExpressionParser<Iter> {
+impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
     fn handle_token_errors(&mut self) {
         while let Some(Err(_)) = self.iter.peek() {
             self.errors
@@ -92,11 +94,12 @@ impl<Iter: Iterator<Item = TokenResult>> ExpressionParser<Iter> {
     }
 
     fn expression(&mut self) -> Span<Expression> {
-        self.literal()
+        self.primary()
     }
 
-    fn literal(&mut self) -> Span<Expression> {
+    fn primary(&mut self) -> Span<Expression> {
         match self.next_token().to_parts() {
+            // Literals are obviously primaries
             (
                 Token::Literal {
                     contents,
@@ -115,10 +118,10 @@ impl<Iter: Iterator<Item = TokenResult>> ExpressionParser<Iter> {
             (Token::True, range) => Span::from_parts(Expression::BoolLiteral(true), range),
             (Token::False, range) => Span::from_parts(Expression::BoolLiteral(false), range),
 
-            (t, range) => {
+            (token, range) => {
                 self.errors
                     .push(ExpressionError::UnexpectedToken(Span::from_parts(
-                        t,
+                        token,
                         range.clone(),
                     )));
                 Span::from_parts(Expression::Placeholder, range)
@@ -129,7 +132,10 @@ impl<Iter: Iterator<Item = TokenResult>> ExpressionParser<Iter> {
 
 pub fn parse_expression<S: IntoIterator<Item = TokenResult>>(
     tokens: S,
-) -> Result<Span<Expression>, Vec<ExpressionError>> {
+) -> Result<Span<Expression>, Vec<ExpressionError>>
+where
+    S::IntoIter: Clone,
+{
     let parser = ExpressionParser::from(tokens);
     parser.parse_expression()
 }

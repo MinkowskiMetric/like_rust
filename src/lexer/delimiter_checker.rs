@@ -2,6 +2,7 @@ use crate::{Span, Token, TokenError};
 
 use super::{DelimiterMode, DelimiterType};
 
+#[derive(Clone, Debug)]
 pub struct DelimiterChecker<Iter: Iterator<Item = Result<Span<Token>, Span<TokenError>>>> {
     tokenizer: Iter,
     pending_token: Option<Span<Token>>,
