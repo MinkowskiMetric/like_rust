@@ -1,6 +1,6 @@
 use std::iter::Peekable;
 
-use super::{Expression, ExpressionError};
+use super::{expression::PathType, Expression, ExpressionError, PathComponent};
 use crate::{CheckDelimiters, Lexer, Span, Token, TokenError};
 
 type TokenResult = Result<Span<Token>, Span<TokenError>>;
@@ -60,11 +60,21 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
         }
     }
 
+    fn current_pos(&mut self) -> usize {
+        self.peek_token().range().start
+    }
+
+    fn consume_matching_token(&mut self, token: Token) -> bool {
+        if *self.peek_token().value() == token {
+            self.next_token();
+            true
+        } else {
+            false
+        }
+    }
+
     fn fix_end_of_file(&mut self, range: std::ops::Range<usize>) -> Span<Token> {
-        assert!(
-            self.end_of_file.is_none(),
-            "End of file token should only occur once"
-        );
+        // This can occur more than once if we peek at the end of the file
         let result = Span::from_parts(Token::EndOfFile, range);
         self.end_of_file = Some(result.clone());
         result
@@ -94,10 +104,98 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
     }
 
     fn expression(&mut self) -> Span<Expression> {
-        self.primary()
+        self.call()
+    }
+
+    fn call(&mut self) -> Span<Expression> {
+        let start_pos = self.current_pos();
+        let mut primary = self.primary();
+
+        loop {
+            if self.consume_matching_token(Token::Dot) {
+                match self.next_token().to_parts() {
+                    (Token::Identifier { contents }, _) => {
+                        primary = Span::from_parts(
+                            Expression::FieldAccess {
+                                object: Box::new(primary),
+                                identifier: contents,
+                            },
+                            start_pos..self.current_pos(),
+                        )
+                    }
+                    (token, range) => break self.unexpected_token(token, range),
+                }
+            } else if self.consume_matching_token(Token::OpenParen) {
+                todo!("Method calls not implemented")
+            } else {
+                break primary;
+            }
+        }
     }
 
     fn primary(&mut self) -> Span<Expression> {
+        match self.peek_token().value() {
+            Token::PathSep
+            | Token::Super
+            | Token::Crate
+            | Token::SelfValue
+            | Token::SelfType
+            | Token::Lt
+            | Token::Identifier { .. } => self.path(),
+
+            _ => self.literal(),
+        }
+    }
+
+    fn path(&mut self) -> Span<Expression> {
+        let start_pos = self.current_pos();
+
+        let ty = if self.consume_matching_token(Token::PathSep) {
+            PathType::Global
+        } else if self.consume_matching_token(Token::Lt) {
+            // This is for type qualified paths like <i32 as PartialCmp>::partial_cmp or something
+            todo!("type qualified paths not yet supported")
+        } else {
+            PathType::Local
+        };
+
+        let mut components = Vec::new();
+
+        loop {
+            match self.next_token().to_parts() {
+                (Token::Super, range) => {
+                    components.push(Span::from_parts(PathComponent::Super, range))
+                }
+                (Token::Crate, range) => {
+                    components.push(Span::from_parts(PathComponent::Crate, range))
+                }
+                (Token::SelfValue, range) => {
+                    components.push(Span::from_parts(PathComponent::SelfValue, range))
+                }
+                (Token::SelfType, range) => {
+                    components.push(Span::from_parts(PathComponent::SelfType, range))
+                }
+                (Token::Identifier { contents }, range) => components.push(Span::from_parts(
+                    PathComponent::Identifier { contents },
+                    range,
+                )),
+
+                (token, range) => break self.unexpected_token(token, range),
+            }
+
+            if self.consume_matching_token(Token::PathSep) {
+                // We've hit a path separator. Check for generic arguments
+                if *self.peek_token().value() == Token::Lt {
+                    todo!("generic arguments not yet supported")
+                }
+            } else {
+                let end_pos = self.current_pos();
+                break Span::from_parts(Expression::Path { ty, components }, start_pos..end_pos);
+            }
+        }
+    }
+
+    fn literal(&mut self) -> Span<Expression> {
         match self.next_token().to_parts() {
             // Literals are obviously primaries
             (
@@ -118,15 +216,23 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
             (Token::True, range) => Span::from_parts(Expression::BoolLiteral(true), range),
             (Token::False, range) => Span::from_parts(Expression::BoolLiteral(false), range),
 
-            (token, range) => {
-                self.errors
-                    .push(ExpressionError::UnexpectedToken(Span::from_parts(
-                        token,
-                        range.clone(),
-                    )));
-                Span::from_parts(Expression::Placeholder, range)
-            }
+            // Literals are always at the end of the chain. If it isn't a literal,
+            // it is an error.
+            (token, range) => self.unexpected_token(token, range),
         }
+    }
+
+    fn unexpected_token(
+        &mut self,
+        token: Token,
+        range: std::ops::Range<usize>,
+    ) -> Span<Expression> {
+        self.errors
+            .push(ExpressionError::UnexpectedToken(Span::from_parts(
+                token,
+                range.clone(),
+            )));
+        Span::from_parts(Expression::Placeholder, range)
     }
 }
 
@@ -221,6 +327,104 @@ mod test {
         test_expression(
             "false",
             Span::from_parts(Expression::BoolLiteral(false), 0..5),
+        );
+    }
+
+    #[test]
+    fn test_paths() {
+        test_expression(
+            "Self::hello",
+            Span::from_parts(
+                Expression::Path {
+                    ty: PathType::Local,
+                    components: vec![
+                        Span::from_parts(PathComponent::SelfType, 0..4),
+                        Span::from_parts(PathComponent::Identifier { contents: 6..11 }, 6..11),
+                    ],
+                },
+                0..11,
+            ),
+        );
+        test_expression(
+            "::Self::hello",
+            Span::from_parts(
+                Expression::Path {
+                    ty: PathType::Global,
+                    components: vec![
+                        Span::from_parts(PathComponent::SelfType, 2..6),
+                        Span::from_parts(PathComponent::Identifier { contents: 8..13 }, 8..13),
+                    ],
+                },
+                0..13,
+            ),
+        );
+    }
+
+    #[test]
+    fn test_field_access() {
+        test_expression(
+            "one::two::three.hello",
+            Span::from_parts(
+                Expression::FieldAccess {
+                    object: Box::new(Span::from_parts(
+                        Expression::Path {
+                            ty: PathType::Local,
+                            components: vec![
+                                Span::from_parts(
+                                    PathComponent::Identifier { contents: 0..3 },
+                                    0..3,
+                                ),
+                                Span::from_parts(
+                                    PathComponent::Identifier { contents: 5..8 },
+                                    5..8,
+                                ),
+                                Span::from_parts(
+                                    PathComponent::Identifier { contents: 10..15 },
+                                    10..15,
+                                ),
+                            ],
+                        },
+                        0..15,
+                    )),
+                    identifier: 16..21,
+                },
+                0..21,
+            ),
+        );
+        test_expression(
+            "one::two::three.hello.world",
+            Span::from_parts(
+                Expression::FieldAccess {
+                    object: Box::new(Span::from_parts(
+                        Expression::FieldAccess {
+                            object: Box::new(Span::from_parts(
+                                Expression::Path {
+                                    ty: PathType::Local,
+                                    components: vec![
+                                        Span::from_parts(
+                                            PathComponent::Identifier { contents: 0..3 },
+                                            0..3,
+                                        ),
+                                        Span::from_parts(
+                                            PathComponent::Identifier { contents: 5..8 },
+                                            5..8,
+                                        ),
+                                        Span::from_parts(
+                                            PathComponent::Identifier { contents: 10..15 },
+                                            10..15,
+                                        ),
+                                    ],
+                                },
+                                0..15,
+                            )),
+                            identifier: 16..21,
+                        },
+                        0..21,
+                    )),
+                    identifier: 22..27,
+                },
+                0..27,
+            ),
         );
     }
 }
