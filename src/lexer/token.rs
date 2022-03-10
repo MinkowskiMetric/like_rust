@@ -304,7 +304,7 @@ impl Token {
         self.delimiter().map(|(mode, _)| mode)
     }
 
-    pub fn to_delimiter(mode: DelimiterMode, ty: DelimiterType) -> Self {
+    pub fn from_delimiter(mode: DelimiterMode, ty: DelimiterType) -> Self {
         match (mode, ty) {
             (DelimiterMode::Open, DelimiterType::Brace) => Token::OpenBrace,
             (DelimiterMode::Close, DelimiterType::Brace) => Token::CloseBrace,

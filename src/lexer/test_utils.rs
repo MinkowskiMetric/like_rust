@@ -1,4 +1,5 @@
-use crate::{Lexer, Span, Token, TokenError};
+use super::tokenizer::Lexer;
+use crate::{Span, Token, TokenError};
 
 pub fn check_tokens_chars<'a, S: Into<Lexer<'a>>>(
     chars: S,

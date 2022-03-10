@@ -1,96 +1,41 @@
-use std::iter::Peekable;
-
 use super::{expression::PathType, Expression, ExpressionError, PathComponent};
-use crate::{CheckDelimiters, Lexer, Span, Token, TokenError};
-
-type TokenResult = Result<Span<Token>, Span<TokenError>>;
+use crate::{
+    lexer::{DelimitedTokenReader, IntoDelimitedTokenReader},
+    Span, Token,
+};
 
 #[must_use]
-pub struct ExpressionParser<Iter: Iterator<Item = TokenResult> + Clone> {
-    iter: Peekable<Iter>,
+pub(crate) struct ExpressionParser<Reader: DelimitedTokenReader> {
+    reader: Reader,
     errors: Vec<ExpressionError>,
-    end_of_file: Option<Span<Token>>,
 }
 
-impl<IntoIter: IntoIterator<Item = TokenResult>> From<IntoIter>
-    for ExpressionParser<IntoIter::IntoIter>
-where
-    IntoIter::IntoIter: Clone,
+impl<IntoReader: IntoDelimitedTokenReader> From<IntoReader>
+    for ExpressionParser<IntoReader::Reader>
 {
-    fn from(s: IntoIter) -> Self {
+    fn from(s: IntoReader) -> Self {
         Self {
-            iter: s.into_iter().peekable(),
+            reader: s.into_delimited_token_reader(),
             errors: Vec::new(),
-            end_of_file: None,
         }
     }
 }
 
-impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
-    fn handle_token_errors(&mut self) {
-        while let Some(Err(_)) = self.iter.peek() {
-            self.errors
-                .push(self.iter.next().unwrap().unwrap_err().into())
+impl<Reader: DelimitedTokenReader + Clone> Clone for ExpressionParser<Reader> {
+    fn clone(&self) -> Self {
+        Self {
+            reader: self.reader.clone(),
+            errors: self.errors.clone(),
         }
     }
+}
 
-    fn next_token(&mut self) -> Span<Token> {
-        self.handle_token_errors();
-
-        // Safety - The unwrap here is fine because we already handled errors
-        let next_token = unsafe { self.iter.next().transpose().unwrap_unchecked() };
-        match next_token.map(Span::to_parts) {
-            Some((Token::EndOfFile, range)) => self.fix_end_of_file(range),
-            None => self.check_end_of_file(),
-
-            Some((t, range)) => Span::from_parts(t, range),
-        }
-    }
-
-    fn peek_token(&mut self) -> Span<Token> {
-        self.handle_token_errors();
-
-        // Safety - The unwrap here is fine because we already handled errors
-        let next_token = unsafe { self.iter.peek().cloned().transpose().unwrap_unchecked() };
-        match next_token.map(Span::to_parts) {
-            Some((Token::EndOfFile, range)) => self.fix_end_of_file(range),
-            None => self.check_end_of_file(),
-
-            Some((t, range)) => Span::from_parts(t, range),
-        }
-    }
-
-    fn current_pos(&mut self) -> usize {
-        self.peek_token().range().start
-    }
-
-    fn consume_matching_token(&mut self, token: Token) -> bool {
-        if *self.peek_token().value() == token {
-            self.next_token();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn fix_end_of_file(&mut self, range: std::ops::Range<usize>) -> Span<Token> {
-        // This can occur more than once if we peek at the end of the file
-        let result = Span::from_parts(Token::EndOfFile, range);
-        self.end_of_file = Some(result.clone());
-        result
-    }
-
-    fn check_end_of_file(&self) -> Span<Token> {
-        self.end_of_file
-            .as_ref()
-            .expect("End of file not seen before end of file")
-            .clone()
-    }
-
+impl<Reader: DelimitedTokenReader> ExpressionParser<Reader> {
+    #[allow(dead_code)]
     pub fn parse_expression(mut self) -> Result<Span<Expression>, Vec<ExpressionError>> {
         let expression = self.expression();
 
-        let next_token = self.next_token();
+        let next_token = self.reader.next_token();
         if *next_token.value() != Token::EndOfFile {
             self.errors
                 .push(ExpressionError::UnexpectedToken(next_token))
@@ -108,24 +53,24 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
     }
 
     fn call(&mut self) -> Span<Expression> {
-        let start_pos = self.current_pos();
+        let start_pos = self.reader.current_pos();
         let mut primary = self.primary();
 
         loop {
-            if self.consume_matching_token(Token::Dot) {
-                match self.next_token().to_parts() {
+            if self.reader.consume_matching_token(Token::Dot) {
+                match self.reader.next_token().to_parts() {
                     (Token::Identifier { contents }, _) => {
                         primary = Span::from_parts(
                             Expression::FieldAccess {
                                 object: Box::new(primary),
                                 identifier: contents,
                             },
-                            start_pos..self.current_pos(),
+                            start_pos..self.reader.current_pos(),
                         )
                     }
                     (token, range) => break self.unexpected_token(token, range),
                 }
-            } else if self.consume_matching_token(Token::OpenParen) {
+            } else if self.reader.consume_matching_token(Token::OpenParen) {
                 todo!("Method calls not implemented")
             } else {
                 break primary;
@@ -134,7 +79,7 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
     }
 
     fn primary(&mut self) -> Span<Expression> {
-        match self.peek_token().value() {
+        match self.reader.peek_token().value() {
             Token::PathSep
             | Token::Super
             | Token::Crate
@@ -148,11 +93,11 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
     }
 
     fn path(&mut self) -> Span<Expression> {
-        let start_pos = self.current_pos();
+        let start_pos = self.reader.current_pos();
 
-        let ty = if self.consume_matching_token(Token::PathSep) {
+        let ty = if self.reader.consume_matching_token(Token::PathSep) {
             PathType::Global
-        } else if self.consume_matching_token(Token::Lt) {
+        } else if self.reader.consume_matching_token(Token::Lt) {
             // This is for type qualified paths like <i32 as PartialCmp>::partial_cmp or something
             todo!("type qualified paths not yet supported")
         } else {
@@ -162,7 +107,7 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
         let mut components = Vec::new();
 
         loop {
-            match self.next_token().to_parts() {
+            match self.reader.next_token().to_parts() {
                 (Token::Super, range) => {
                     components.push(Span::from_parts(PathComponent::Super, range))
                 }
@@ -183,20 +128,20 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
                 (token, range) => break self.unexpected_token(token, range),
             }
 
-            if self.consume_matching_token(Token::PathSep) {
+            if self.reader.consume_matching_token(Token::PathSep) {
                 // We've hit a path separator. Check for generic arguments
-                if *self.peek_token().value() == Token::Lt {
+                if *self.reader.peek_token().value() == Token::Lt {
                     todo!("generic arguments not yet supported")
                 }
             } else {
-                let end_pos = self.current_pos();
+                let end_pos = self.reader.current_pos();
                 break Span::from_parts(Expression::Path { ty, components }, start_pos..end_pos);
             }
         }
     }
 
     fn literal(&mut self) -> Span<Expression> {
-        match self.next_token().to_parts() {
+        match self.reader.next_token().to_parts() {
             // Literals are obviously primaries
             (
                 Token::Literal {
@@ -236,33 +181,20 @@ impl<Iter: Iterator<Item = TokenResult> + Clone> ExpressionParser<Iter> {
     }
 }
 
-pub fn parse_expression<S: IntoIterator<Item = TokenResult>>(
-    tokens: S,
-) -> Result<Span<Expression>, Vec<ExpressionError>>
-where
-    S::IntoIter: Clone,
-{
-    let parser = ExpressionParser::from(tokens);
-    parser.parse_expression()
-}
-
-pub fn parse_expression_string(s: &str) -> Result<Span<Expression>, Vec<ExpressionError>> {
-    let tokens = Lexer::from(s).check_delimiters();
-    parse_expression(tokens)
-}
-
 #[cfg(test)]
 mod test {
-    use crate::LiteralType;
+    use crate::{lexer::tokenizer::Lexer, LiteralType};
 
     use super::*;
 
     fn test_failed_expression(code: &str, expected_errors: impl AsRef<[ExpressionError]>) {
+        let mut actual_errors =
+            ExpressionParser::from(Lexer::from(code).into_delimited_token_reader())
+                .parse_expression()
+                .expect_err("Test unexpectedly did not fail")
+                .into_iter()
+                .enumerate();
         let mut expected_errors = expected_errors.as_ref().iter().enumerate();
-        let mut actual_errors = parse_expression_string(code)
-            .expect_err("Test unexpectedly succeeded")
-            .into_iter()
-            .enumerate();
 
         loop {
             match (actual_errors.next(), expected_errors.next()) {
@@ -277,7 +209,9 @@ mod test {
     }
 
     fn test_expression(code: &str, expected: Span<Expression>) {
-        let actual = parse_expression_string(code).expect("Test expected to succeed");
+        let actual = ExpressionParser::from(Lexer::from(code).into_delimited_token_reader())
+            .parse_expression()
+            .expect("test expected to succeed");
         assert_eq!(actual, expected, "Expressions do not match")
     }
 
