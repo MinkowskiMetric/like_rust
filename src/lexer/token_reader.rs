@@ -91,8 +91,7 @@ impl<Iter: Iterator<Item = TokenResult>> TokenReader for TokenIteratorReader<Ite
 impl<Iter: Iterator<Item = TokenResult>> TokenIteratorReader<Iter> {
     fn handle_token_errors(&mut self) {
         while let Some(Err(_)) = self.iter.peek() {
-            self.errors
-                .push(self.iter.next().unwrap().unwrap_err())
+            self.errors.push(self.iter.next().unwrap().unwrap_err())
         }
     }
 

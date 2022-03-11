@@ -114,11 +114,14 @@ impl<Reader: TokenReader> TokenReader for DelimiterChecker<Reader> {
         self.fill_peek_entry().take()
     }
 
-    fn finish(self) -> Result<(), Vec<Span<TokenError>>> {
-        if self.errors.is_empty() {
+    fn finish(mut self) -> Result<(), Vec<Span<TokenError>>> {
+        let mut errors = self.reader.finish().err().unwrap_or_else(Vec::new);
+        errors.append(&mut self.errors);
+
+        if errors.is_empty() {
             Ok(())
         } else {
-            Err(self.errors)
+            Err(errors)
         }
     }
 }
